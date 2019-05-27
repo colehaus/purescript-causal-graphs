@@ -1,0 +1,33 @@
+{
+  "license": "AGPL-3.0-or-later",
+  "name": "purescript-causal-graphs",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "output",
+    "result"
+  ],
+  "dependencies": {
+    "purescript-colehaus-properties": "^0.3.2",
+    "purescript-graphs": "^4.0.0",
+    "purescript-lists": "^5.3.0",
+    "purescript-partial": "^2.0.0",
+    "purescript-prelude": "^4.1.0",
+    "purescript-tuples": "^5.1.0",
+    "purescript-partial-order": "^0.0.1",
+    "purescript-proportion": "^0.3.0",
+    "purescript-tables": "../purescript-tables",
+    "purescript-rationals": "^5.0.0"
+  },
+  "devDependencies": {
+    "purescript-psci-support": "^4.0.0",
+    "purescript-quickcheck": "^5.0.0",
+    "purescript-spec": "^3.1.0",
+    "purescript-spec-quickcheck": "^3.1.0"
+  },
+  "repository": {
+      "type": "git",
+      "url": "https://github.com/colehaus/purescript-causal-graphs.git"
+  }
+}
