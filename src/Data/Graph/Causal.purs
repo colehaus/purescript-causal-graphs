@@ -2,11 +2,13 @@ module Data.Graph.Causal where
 
 import Prelude
 
+import Data.Foldable (foldr)
 import Data.Foldable as Foldable
 import Data.Graph (Graph)
 import Data.Graph as Graph
 import Data.List (List(..))
 import Data.List as List
+import Data.Map as Map
 import Data.Set (Set)
 import Data.Set as Set
 
@@ -18,8 +20,11 @@ collider :: forall k v. Ord k => k -> List k -> Graph k v -> Boolean
 collider k path g =
   Foldable.length (Graph.parents k g `Set.intersection` Set.fromFoldable path) == 2
 
-dSeparated :: forall k v. Ord k => k -> k -> Set k -> Graph k v -> Boolean
-dSeparated x y w g = Set.isEmpty $ dConnectedBy x y w g
+isDSeparated :: forall k v. Ord k => k -> k -> Set k -> Graph k v -> Boolean
+isDSeparated x y w g = Set.isEmpty $ dConnectedBy x y w g
+
+isDConnected :: forall k v. Ord k => k -> k -> Set k -> Graph k v -> Boolean
+isDConnected x y w g = not <<< Set.isEmpty $ dConnectedBy x y w g
 
 dConnectedBy :: forall k v. Ord k => k -> k -> Set k -> Graph k v -> Set (List k)
 dConnectedBy x y w g =
@@ -31,8 +36,17 @@ dConnectedBy x y w g =
         nonCollidersDisjointFromW = Set.isEmpty (Set.fromFoldable no `Set.intersection` w)
         collidersAncestorsOfW =
           Foldable.all
-            (\k -> not <<< Set.isEmpty $ Set.insert k (Graph.descendants k g) `Set.intersection` w)
+            (\k -> not <<< Set.isEmpty $
+              Set.insert k (Graph.descendants k g) `Set.intersection` w)
             yes
+
+dSeparated :: forall k v. Ord k => k -> Set k -> Graph k v -> Set k
+dSeparated k w g =
+  Set.filter (\v -> isDSeparated k v w g) <<< Set.delete k <<< Map.keys <<< Graph.toMap $ g
+
+dConnected :: forall k v. Ord k => k -> Set k -> Graph k v -> Set k
+dConnected k w g =
+  Set.filter (\v -> isDConnected k v w g) <<< Set.delete k <<< Map.keys <<< Graph.toMap $ g
 
 allUndirectedPaths :: forall k v. Ord k => k -> k -> Graph k v -> Set (List k)
 allUndirectedPaths start end g = Set.map List.reverse $ go mempty start
@@ -48,3 +62,13 @@ allUndirectedPaths start end g = Set.map List.reverse $ go mempty start
         adjacent' = Graph.adjacent k g `Set.difference` Set.fromFoldable hist
         hist' = k `Cons` hist
 
+instruments :: forall k v. Ord k => k -> k -> Set k -> Graph k v -> Set k
+instruments x y w g = dConnected x w g `Set.intersection` dSeparated y w (intervene x g)
+
+isInstrument :: forall k v. Ord k => k -> k -> k -> Set k -> Graph k v -> Boolean
+isInstrument i x y w g = i `Set.member` instruments x y w g
+
+intervene :: forall k v. Ord k => k -> Graph k v -> Graph k v
+intervene k g = foldr removePointers g <<< Map.keys <<< Graph.toMap $ g
+  where
+    removePointers = Graph.alterEdges (map $ Set.filter (_ /= k))

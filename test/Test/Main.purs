@@ -41,6 +41,29 @@ main = run [consoleReporter] do
             , n 'Y' [ ]
             , n 'Z' [ 'Y' ]
             ])
+      --        W
+      --      /   \
+      --      v    v
+      -- X -> Y -> Z
+      graph3 =
+        Graph.fromMap (
+          Map.fromFoldable
+            [ n 'W' [ 'Y', 'Z' ]
+            , n 'X' [ 'Y' ]
+            , n 'Y' [ 'Z' ]
+            , n 'Z' [ ]
+            ])
+  describe "intervene" do
+    it "works for examples" do
+      let intervened =
+            Graph.fromMap (
+              Map.fromFoldable
+                [ n 'W' [ 'Z' ]
+                , n 'X' [ ]
+                , n 'Y' [ 'Z' ]
+                , n 'Z' [ ]
+                ])
+      Graph.toMap (Causal.intervene 'Y' graph3) `shouldEqual` Graph.toMap intervened
   describe "dConnectedBy" do
     it "worksForExamples" do
       Causal.dConnectedBy 'X' 'Y' Set.empty graph1 `shouldEqual` Set.empty
@@ -50,3 +73,6 @@ main = run [consoleReporter] do
 
       Causal.dConnectedBy 'X' 'Z' Set.empty graph2 `shouldEqual` Set.empty
       Causal.dConnectedBy 'X' 'Z' (Set.singleton 'Y') graph2 `shouldEqual` Set.singleton (List.fromFoldable [ 'X', 'Y', 'Z' ])
+  describe "instruments" do
+    it "worksForExamples" do
+      Causal.instruments 'Y' 'Z' Set.empty graph3 `shouldEqual` Set.singleton 'X'
