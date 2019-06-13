@@ -8,6 +8,7 @@ import Data.List as List
 import Data.Map as Map
 import Data.Set as Set
 import Data.Tuple (Tuple(..))
+import Data.TwoSet (TwoSet(..))
 import Effect (Effect)
 import Test.Spec (describe, it)
 import Test.Spec.Assertions (shouldEqual)
@@ -66,13 +67,34 @@ main = run [consoleReporter] do
       Graph.toMap (Causal.intervene 'Y' graph3) `shouldEqual` Graph.toMap intervened
   describe "dConnectedBy" do
     it "worksForExamples" do
-      Causal.dConnectedBy 'X' 'Y' Set.empty graph1 `shouldEqual` Set.empty
-      Causal.dConnectedBy 'X' 'Y' (Set.fromFoldable [ 'S' , 'T' ]) graph1 `shouldEqual`
-        Set.singleton (List.fromFoldable [ 'X', 'U', 'V', 'W', 'Y' ])
-      Causal.dConnectedBy 'X' 'Y' (Set.fromFoldable [ 'S', 'T', 'V']) graph1 `shouldEqual` Set.empty
+      Causal.dConnectedBy (MkTwoSet 'X' 'Y') Set.empty graph1 `shouldEqual` Set.empty
 
-      Causal.dConnectedBy 'X' 'Z' Set.empty graph2 `shouldEqual` Set.empty
-      Causal.dConnectedBy 'X' 'Z' (Set.singleton 'Y') graph2 `shouldEqual` Set.singleton (List.fromFoldable [ 'X', 'Y', 'Z' ])
+      Causal.dConnectedBy
+          (MkTwoSet 'X' 'Y')
+          (Set.fromFoldable [ 'S' , 'T' ])
+          graph1
+        `shouldEqual`
+      Set.singleton (List.fromFoldable [ 'X', 'U', 'V', 'W', 'Y' ])
+
+      Causal.dConnectedBy
+          (MkTwoSet 'X' 'Y')
+          (Set.fromFoldable [ 'S', 'T', 'V'])
+          graph1
+        `shouldEqual`
+      Set.empty
+
+      Causal.dConnectedBy (MkTwoSet 'X' 'Z') Set.empty graph2 `shouldEqual` Set.empty
+
+      Causal.dConnectedBy (MkTwoSet 'X' 'Z') (Set.singleton 'Y') graph2 `shouldEqual`
+        Set.singleton (List.fromFoldable [ 'X', 'Y', 'Z' ])
+
+      Causal.dConnectedBy (MkTwoSet 'W' 'Z') Set.empty graph3 `shouldEqual`
+        Set.fromFoldable
+          [
+            List.fromFoldable [ 'W', 'Z' ]
+          , List.fromFoldable [ 'W', 'Y', 'Z' ]
+          ]
   describe "instruments" do
     it "worksForExamples" do
-      Causal.instruments 'Y' 'Z' Set.empty graph3 `shouldEqual` Set.singleton 'X'
+      Causal.instruments { cause: 'Y', effect: 'Z' } Set.empty graph3 `shouldEqual`
+        Set.singleton 'X'
