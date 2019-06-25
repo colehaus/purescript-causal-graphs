@@ -9,7 +9,7 @@
     "result"
   ],
   "dependencies": {
-    "purescript-colehaus-graphs": "^5.0.1",
+    "purescript-colehaus-graphs": "^6.0.0",
     "purescript-lists": "^5.3.0",
     "purescript-ordered-collections": "^1.6.1",
     "purescript-twoset": "^0.1.0",

@@ -5,11 +5,14 @@ import Prelude
 import Data.Graph as Graph
 import Data.Graph.Causal as Causal
 import Data.List as List
+import Data.List.NonEmpty as NEL
 import Data.Map as Map
+import Data.Maybe (Maybe(..), fromJust)
 import Data.Set as Set
 import Data.Tuple (Tuple(..))
 import Data.TwoSet (TwoSet(..))
 import Effect (Effect)
+import Partial.Unsafe (unsafePartial)
 import Test.Spec (describe, it)
 import Test.Spec.Assertions (shouldEqual)
 import Test.Spec.Reporter.Console (consoleReporter)
@@ -54,6 +57,18 @@ main = run [consoleReporter] do
             , n 'Y' [ 'Z' ]
             , n 'Z' [ ]
             ])
+      -- Z -> W
+      -- |    |
+      -- v    v
+      -- X -> Y
+      graph4 =
+        Graph.fromMap (
+          Map.fromFoldable
+            [ n 'Z' [ 'W', 'X' ]
+            , n 'X' [ 'Y' ]
+            , n 'W' [ 'Y' ]
+            , n 'Y' []
+            ])
   describe "intervene" do
     it "works for examples" do
       let intervened =
@@ -66,7 +81,8 @@ main = run [consoleReporter] do
                 ])
       Graph.toMap (Causal.intervene 'Y' graph3) `shouldEqual` Graph.toMap intervened
   describe "dConnectedBy" do
-    it "worksForExamples" do
+    it "works for examples" do
+      let nel x = unsafePartial $ fromJust <<< NEL.fromList <<< List.fromFoldable $ x
       Causal.dConnectedBy (MkTwoSet 'X' 'Y') Set.empty graph1 `shouldEqual` Set.empty
 
       Causal.dConnectedBy
@@ -74,7 +90,7 @@ main = run [consoleReporter] do
           (Set.fromFoldable [ 'S' , 'T' ])
           graph1
         `shouldEqual`
-      Set.singleton (List.fromFoldable [ 'X', 'U', 'V', 'W', 'Y' ])
+      Set.singleton (nel [ 'X', 'U', 'V', 'W', 'Y' ])
 
       Causal.dConnectedBy
           (MkTwoSet 'X' 'Y')
@@ -86,15 +102,18 @@ main = run [consoleReporter] do
       Causal.dConnectedBy (MkTwoSet 'X' 'Z') Set.empty graph2 `shouldEqual` Set.empty
 
       Causal.dConnectedBy (MkTwoSet 'X' 'Z') (Set.singleton 'Y') graph2 `shouldEqual`
-        Set.singleton (List.fromFoldable [ 'X', 'Y', 'Z' ])
+        Set.singleton (nel [ 'X', 'Y', 'Z' ])
 
       Causal.dConnectedBy (MkTwoSet 'W' 'Z') Set.empty graph3 `shouldEqual`
         Set.fromFoldable
           [
-            List.fromFoldable [ 'W', 'Z' ]
-          , List.fromFoldable [ 'W', 'Y', 'Z' ]
+            nel [ 'W', 'Z' ]
+          , nel [ 'W', 'Y', 'Z' ]
           ]
   describe "instruments" do
-    it "worksForExamples" do
+    it "works for examples" do
       Causal.instruments { cause: 'Y', effect: 'Z' } Set.empty graph3 `shouldEqual`
         Set.singleton 'X'
+  describe "backdoor" do
+    it "works for examples" do
+      Causal.satisfyBackdoor { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph4 `shouldEqual` Just true
