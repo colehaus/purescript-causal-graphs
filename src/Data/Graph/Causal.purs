@@ -11,9 +11,10 @@ import Data.List.NonEmpty (NonEmptyList)
 import Data.List.NonEmpty as NEL
 import Data.List.Types (nelCons)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set (Set)
 import Data.Set as Set
+import Data.Tuple (Tuple(..))
 import Data.TwoSet (TwoSet(..))
 
 -- In theory, we could have a `Path` type guarded by a smart constructor to enforce that our
@@ -27,13 +28,21 @@ collider k path g =
   where
     isParent p c g' = p `Set.member` Graph.parents c g'
 
-areDConnected :: forall k v. Ord k => TwoSet k -> Set k -> Graph k v -> Boolean
-areDConnected ks conditionedOn g = not <<< Set.isEmpty $ dConnectedBy ks conditionedOn g
+-- Returns `Nothing` iff the `TwoSet` overlaps with the set conditioned on
+areDConnected :: forall k v. Ord k => TwoSet k -> Set k -> Graph k v -> Maybe Boolean
+areDConnected ks conditionedOn g = not <<< Set.isEmpty <$> dConnectedBy ks conditionedOn g
 
-dConnectedBy :: forall k v. Ord k => TwoSet k -> Set k -> Graph k v -> Set (NonEmptyList k)
-dConnectedBy ks conditionedOn g =
-  Set.filter unblocked $ allUndirectedPaths ks g
+-- Returns `Nothing` iff the `TwoSet` overlaps with the set conditioned on
+dConnectedBy ::
+  forall k v.
+  Ord k =>
+  TwoSet k -> Set k -> Graph k v -> Maybe (Set (NonEmptyList k))
+dConnectedBy ks@(MkTwoSet k1 k2) conditionedOn g =
+  if k1 `Set.member` conditionedOn || k2 `Set.member` conditionedOn
+  then Nothing
+  else Just result
   where
+    result = Set.filter unblocked $ allUndirectedPaths ks g
     unblocked path = nonCollidersDisjointFromW && collidersAncestorsOfW
       where
         { yes, no } = NEL.partition (\k -> collider k path g) path
@@ -45,22 +54,34 @@ dConnectedBy ks conditionedOn g =
               Set.insert k (Graph.descendants k g) `Set.intersection` conditionedOn)
             yes
 
-dConnectedTo :: forall k v. Ord k => k -> Set k -> Graph k v -> Set k
+-- Returns `Nothing` iff the `k` is in the set conditioned on
+dConnectedTo :: forall k v. Ord k => k -> Set k -> Graph k v -> Maybe (Set k)
 dConnectedTo k conditionedOn g =
-  Set.filter (\v -> areDConnected (MkTwoSet k v) conditionedOn g) <<<
-  Set.delete k <<< Map.keys <<< Graph.toMap $ g
+  if k `Set.member` conditionedOn
+  then Nothing
+  else Just result
+  where
+    result =
+      Set.filter (\v -> fromMaybe false $ areDConnected (MkTwoSet k v) conditionedOn g) <<<
+      Set.delete k <<< Map.keys <<< Graph.toMap $ g
 
-areDSeparated :: forall k v. Ord k => TwoSet k -> Set k -> Graph k v -> Boolean
-areDSeparated ks conditionedOn g = Set.isEmpty $ dConnectedBy ks conditionedOn g
+areDSeparated :: forall k v. Ord k => TwoSet k -> Set k -> Graph k v -> Maybe Boolean
+areDSeparated ks conditionedOn g = Set.isEmpty <$> dConnectedBy ks conditionedOn g
 
-dSeparatedFrom :: forall k v. Ord k => k -> Set k -> Graph k v -> Set k
+-- Returns `Nothing` iff the `k` is in the set conditioned on
+dSeparatedFrom :: forall k v. Ord k => k -> Set k -> Graph k v -> Maybe (Set k)
 dSeparatedFrom k conditionedOn g =
-  Set.filter (\v -> areDSeparated (MkTwoSet k v) conditionedOn g) <<<
-  Set.delete k <<< Map.keys <<< Graph.toMap $ g
+  if k `Set.member` conditionedOn
+  then Nothing
+  else Just result
+  where
+    result =
+      Set.filter (\v -> fromMaybe false $ areDSeparated (MkTwoSet k v) conditionedOn g) <<<
+      Set.delete k <<< Map.keys <<< Graph.toMap $ g
 
 dSeparations :: forall k v. Ord k => Set k -> Graph k v -> Set (TwoSet k)
 dSeparations conditionedOn g =
-  Set.filter (\ks -> areDSeparated ks conditionedOn g) <<<
+  Set.filter (\ks -> fromMaybe false $ areDSeparated ks conditionedOn g) <<<
   distinctTwoSets <<<
   Map.keys <<< Graph.toMap $ g
 
@@ -78,15 +99,23 @@ allUndirectedPaths (MkTwoSet start end) g = Set.map NEL.reverse $ go Nothing sta
         adjacent' = Graph.adjacent k g `Set.difference` maybe Set.empty Set.fromFoldable hist
         hist' = maybe (pure k) (nelCons k) hist
 
-instruments :: forall k v. Ord k => { cause :: k, effect :: k } -> Set k -> Graph k v -> Set k
+-- Returns `Nothing` iff the cause or the effect is in the set conditioned on
+instruments ::
+  forall k v.
+  Ord k =>
+  { cause :: k, effect :: k } -> Set k -> Graph k v -> Maybe (Set k)
 instruments { cause, effect } conditionedOn g =
-  dConnectedTo cause conditionedOn g `Set.intersection`
-  dSeparatedFrom effect conditionedOn (intervene cause g)
+  case
+    Tuple
+      (dConnectedTo cause conditionedOn g)
+      (dSeparatedFrom effect conditionedOn (intervene cause g)) of
+    Tuple (Just connected) (Just separated) -> Just $ connected `Set.intersection` separated
+    Tuple _ _ -> Nothing
 
 isInstrument ::
-  forall k v. Ord k => k -> { cause :: k, effect :: k } -> Set k -> Graph k v -> Boolean
+  forall k v. Ord k => k -> { cause :: k, effect :: k } -> Set k -> Graph k v -> Maybe Boolean
 isInstrument i ks conditionedOn g =
-  i `Set.member` instruments ks conditionedOn g
+  Set.member i <$> instruments ks conditionedOn g
 
 intervene :: forall k v. Ord k => k -> Graph k v -> Graph k v
 intervene k g = foldr removePointers g <<< Map.keys <<< Graph.toMap $ g

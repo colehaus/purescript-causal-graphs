@@ -83,37 +83,73 @@ main = run [consoleReporter] do
   describe "dConnectedBy" do
     it "works for examples" do
       let nel x = unsafePartial $ fromJust <<< NEL.fromList <<< List.fromFoldable $ x
-      Causal.dConnectedBy (MkTwoSet 'X' 'Y') Set.empty graph1 `shouldEqual` Set.empty
+      Causal.dConnectedBy (MkTwoSet 'X' 'Y') Set.empty graph1 `shouldEqual` Just Set.empty
 
       Causal.dConnectedBy
           (MkTwoSet 'X' 'Y')
           (Set.fromFoldable [ 'S' , 'T' ])
           graph1
         `shouldEqual`
-      Set.singleton (nel [ 'X', 'U', 'V', 'W', 'Y' ])
+      Just (Set.singleton (nel [ 'X', 'U', 'V', 'W', 'Y' ]))
 
       Causal.dConnectedBy
           (MkTwoSet 'X' 'Y')
           (Set.fromFoldable [ 'S', 'T', 'V'])
           graph1
         `shouldEqual`
-      Set.empty
+      Just Set.empty
 
-      Causal.dConnectedBy (MkTwoSet 'X' 'Z') Set.empty graph2 `shouldEqual` Set.empty
+      Causal.dConnectedBy (MkTwoSet 'X' 'Z') Set.empty graph2 `shouldEqual` Just Set.empty
 
       Causal.dConnectedBy (MkTwoSet 'X' 'Z') (Set.singleton 'Y') graph2 `shouldEqual`
-        Set.singleton (nel [ 'X', 'Y', 'Z' ])
+        Just (Set.singleton (nel [ 'X', 'Y', 'Z' ]))
 
       Causal.dConnectedBy (MkTwoSet 'W' 'Z') Set.empty graph3 `shouldEqual`
-        Set.fromFoldable
+        Just (Set.fromFoldable
           [
             nel [ 'W', 'Z' ]
           , nel [ 'W', 'Y', 'Z' ]
-          ]
+          ])
+  describe "dSeparations" do
+    it "works for examples" do
+      Causal.dSeparations (Set.singleton 'X') graph2 `shouldEqual` Set.empty
+      Causal.dSeparations (Set.singleton 'Y') graph2 `shouldEqual` Set.empty
+      Causal.dSeparations (Set.singleton 'Z') graph2 `shouldEqual` Set.empty
+      Causal.dSeparations Set.empty graph1
+        `shouldEqual`
+      Set.fromFoldable
+        [ MkTwoSet 'X' 'T'
+        , MkTwoSet 'X' 'V'
+        , MkTwoSet 'X' 'W'
+        , MkTwoSet 'Y' 'S'
+        , MkTwoSet 'Y' 'U'
+        , MkTwoSet 'Y' 'V'
+        , MkTwoSet 'Y' 'X'
+        , MkTwoSet 'Z' 'S'
+        , MkTwoSet 'Z' 'U'
+        , MkTwoSet 'Z' 'V'
+        , MkTwoSet 'Z' 'X'
+        ]
+      Causal.dSeparations (Set.singleton 'U') graph1
+        `shouldEqual`
+      Set.fromFoldable
+        [ MkTwoSet 'T' 'S'
+        , MkTwoSet 'V' 'S'
+        , MkTwoSet 'W' 'S'
+        , MkTwoSet 'X' 'S'
+        , MkTwoSet 'Y' 'S'
+        , MkTwoSet 'Y' 'V'
+        , MkTwoSet 'Y' 'X'
+        , MkTwoSet 'Z' 'S'
+        , MkTwoSet 'Z' 'V'
+        , MkTwoSet 'Z' 'X'
+        ]
   describe "instruments" do
     it "works for examples" do
       Causal.instruments { cause: 'Y', effect: 'Z' } Set.empty graph3 `shouldEqual`
-        Set.singleton 'X'
+        Just (Set.singleton 'X')
   describe "backdoor" do
     it "works for examples" do
-      Causal.satisfyBackdoor { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph4 `shouldEqual` Just true
+      Causal.satisfyBackdoor { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph4
+        `shouldEqual`
+      Just true
