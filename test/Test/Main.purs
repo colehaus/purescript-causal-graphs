@@ -2,6 +2,7 @@ module Test.Main where
 
 import Prelude
 
+import Causal.Kernel (disjointnessSingleton)
 import Data.Array as Array
 import Data.Foldable as Foldable
 import Data.Function (on)
@@ -12,7 +13,7 @@ import Data.Graph.Causal as Causal
 import Data.List as List
 import Data.List.NonEmpty as NEL
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromJust)
+import Data.Maybe (Maybe(..), fromJust, isJust)
 import Data.Newtype (class Newtype, un)
 import Data.Set (Set)
 import Data.Set as Set
@@ -20,7 +21,9 @@ import Data.Tuple (Tuple(..), uncurry)
 import Data.TwoSet (TwoSet(..))
 import Effect (Effect)
 import Effect.Aff (Aff)
-import Partial.Unsafe (unsafeCrashWith, unsafePartial)
+import GDP.Named (name2, name3, unName)
+import GDP.Proof (axiom)
+import Partial.Unsafe (unsafePartial)
 import Test.QuickCheck (arbitrary)
 import Test.QuickCheck as QuickCheck
 import Test.QuickCheck.Gen (Gen, suchThat)
@@ -98,29 +101,25 @@ main = run [consoleReporter] do
       Graph.toMap (Causal.intervene 'Y' graph3) `shouldEqual` Graph.toMap intervened
     it "dConnectedBy" do
       let nel x = unsafePartial $ fromJust <<< NEL.fromList <<< List.fromFoldable $ x
-      Causal.dConnectedBy (MkTwoSet 'X' 'Y') Set.empty graph1 `shouldEqual` Just Set.empty
+      name3 (MkTwoSet 'X' 'Y') Set.empty graph1 (\vs c g ->
+        Causal.dConnectedBy axiom vs c g `shouldEqual` Set.empty)
+      name3 (MkTwoSet 'X' 'Y') (Set.fromFoldable [ 'S', 'T' ]) graph1 (\vs c g ->
+        (Set.map unName $ Causal.dConnectedBy axiom vs c g) `shouldEqual`
+        Set.singleton (nel [ 'X', 'U', 'V', 'W', 'Y' ]))
 
-      Causal.dConnectedBy
-          (MkTwoSet 'X' 'Y')
-          (Set.fromFoldable [ 'S' , 'T' ])
-          graph1
-        `shouldEqual`
-      Just (Set.singleton (nel [ 'X', 'U', 'V', 'W', 'Y' ]))
+      name3 (MkTwoSet 'X' 'Y') (Set.fromFoldable [ 'S', 'T', 'V']) graph1 (\vs c g ->
+        Causal.dConnectedBy axiom vs c g `shouldEqual` Set.empty)
 
-      Causal.dConnectedBy
-          (MkTwoSet 'X' 'Y')
-          (Set.fromFoldable [ 'S', 'T', 'V'])
-          graph1
-        `shouldEqual`
-      Just Set.empty
+      name3 (MkTwoSet 'X' 'Z') Set.empty graph2 (\vs c g ->
+        Causal.dConnectedBy axiom vs c g `shouldEqual` Set.empty)
 
-      Causal.dConnectedBy (MkTwoSet 'X' 'Z') Set.empty graph2 `shouldEqual` Just Set.empty
+      name3 (MkTwoSet 'X' 'Z') (Set.singleton 'Y') graph2 (\vs c g ->
+        (Set.map unName $ Causal.dConnectedBy axiom vs c g) `shouldEqual`
+        Set.singleton (nel [ 'X', 'Y', 'Z' ]))
 
-      Causal.dConnectedBy (MkTwoSet 'X' 'Z') (Set.singleton 'Y') graph2 `shouldEqual`
-        Just (Set.singleton (nel [ 'X', 'Y', 'Z' ]))
-
-      Causal.dConnectedBy (MkTwoSet 'W' 'Z') Set.empty graph3 `shouldEqual`
-        Just (Set.fromFoldable
+      name3 (MkTwoSet 'W' 'Z') Set.empty graph3 (\vs c g ->
+        (Set.map unName $ Causal.dConnectedBy axiom vs c g) `shouldEqual`
+        Set.fromFoldable
           [
             nel [ 'W', 'Z' ]
           , nel [ 'W', 'Y', 'Z' ]
@@ -159,36 +158,35 @@ main = run [consoleReporter] do
         , MkTwoSet 'Z' 'X'
         ]
     it "instruments" do
-      Causal.instruments { cause: 'Y', effect: 'Z' } Set.empty graph3 `shouldEqual`
-        Just (Set.singleton 'X')
+      name2 { cause: 'Y', effect: 'Z' } Set.empty (\ce c ->
+        Causal.instruments axiom ce c graph3 `shouldEqual` Set.singleton 'X')
     it "backdoor" do
-      Causal.satisfyBackdoor { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph4
-        `shouldEqual`
-      Just true
+      name3 { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph4 (\ce c g ->
+        isJust (Causal.satisfyBackdoor axiom ce c g) `shouldEqual` true)
   describe "Relationships" do
     it "dSeparatedFrom and dConnectedTo cohere" do
       quickCheck'' ado
-        k <- arbitrary
-        conditionOn <- genSet arbitrary
+        k' <- arbitrary
+        conditionOn' <- genSet arbitrary
         g <- genAcyclicGraph arbitrary arbitrary :: Gen (Graph SmallInt SmallInt)
         in
-          let
-            mConnections = Causal.dConnectedTo k conditionOn g
-            mSeparations = Causal.dSeparatedFrom k conditionOn g
-            keys = Map.keys (Graph.toMap g)
-          in
-            case Tuple mConnections mSeparations of
-              Tuple Nothing Nothing -> true
-              Tuple (Just connections) (Just separations) ->
-                Set.fromFoldable
-                  [ connections
-                  , separations
-                  , keys `Set.intersection` conditionOn
-                  , keys `Set.intersection` Set.singleton k
-                  ]
-                `isPartitionOf`
-                  keys
-              Tuple _ _ -> unsafeCrashWith "Should never happen"
+          name2 k' conditionOn' (\k conditionOn ->
+            case disjointnessSingleton k conditionOn of
+              Nothing -> true
+              Just p ->
+                let
+                  connections = Causal.dConnectedTo p k conditionOn g
+                  separations = Causal.dSeparatedFrom p k conditionOn g
+                  keys = Map.keys (Graph.toMap g)
+                in
+                  Set.fromFoldable
+                    [ connections
+                    , separations
+                    , keys `Set.intersection` unName conditionOn
+                    , keys `Set.intersection` Set.singleton (unName k)
+                    ]
+                    `isPartitionOf`
+                  keys)
 
 isPartitionOf :: forall a. Ord a => Set (Set a) -> Set a -> Boolean
 isPartitionOf ss s =
