@@ -2,6 +2,7 @@ module Data.Graph.Causal where
 
 import Prelude
 
+import Causal.Kernel (AreDisjoint, IsPathOf, PathOf, allUndirectedPaths, cause, cause_disjoint, disjointnessTwoSet, effect, effect_disjoint, pathOf_isPathOf)
 import Data.Foldable (foldr)
 import Data.Foldable as Foldable
 import Data.Graph (Graph)
@@ -9,134 +10,138 @@ import Data.Graph as Graph
 import Data.Graph.Causal.Utility (after, before, distinctTwoSets)
 import Data.List.NonEmpty (NonEmptyList)
 import Data.List.NonEmpty as NEL
-import Data.List.Types (nelCons)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe, maybe)
+import Data.Maybe (maybe)
 import Data.Set (Set)
 import Data.Set as Set
-import Data.Tuple (Tuple(..))
 import Data.TwoSet (TwoSet(..))
+import GDP.Named (Named, name2, name3, unName)
+import GDP.Proof (Proof)
 
--- In theory, we could have a `Path` type guarded by a smart constructor to enforce that our
--- `List k` is actually a proper path. But a path only makes sense in the context of a graph,
--- so the `Path` type would have to carry around a copy of the graph too which sounds like a
--- hassle.
-collider :: forall k v. Ord k => k -> NonEmptyList k -> Graph k v -> Boolean
-collider k path g =
-  Foldable.any (\a -> isParent a k g) (after k path) &&
-  Foldable.any (\b -> isParent b k g) (before k path)
-  where
-    isParent p c g' = p `Set.member` Graph.parents c g'
-
--- Returns `Nothing` iff the `TwoSet` overlaps with the set conditioned on
-areDConnected :: forall k v. Ord k => TwoSet k -> Set k -> Graph k v -> Maybe Boolean
-areDConnected ks conditionedOn g = not <<< Set.isEmpty <$> dConnectedBy ks conditionedOn g
-
--- Returns `Nothing` iff the `TwoSet` overlaps with the set conditioned on
-dConnectedBy ::
-  forall k v.
+collider ::
+  forall p g k v.
   Ord k =>
-  TwoSet k -> Set k -> Graph k v -> Maybe (Set (NonEmptyList k))
-dConnectedBy ks@(MkTwoSet k1 k2) conditionedOn g =
-  if k1 `Set.member` conditionedOn || k2 `Set.member` conditionedOn
-  then Nothing
-  else Just result
+  Proof (IsPathOf p g) -> k -> Named p (NonEmptyList k) -> Named g (Graph k v) -> Boolean
+collider _ k path graph =
+  Foldable.any (\a -> Graph.isParentOf (unName graph) a k) (after k (unName path)) &&
+  Foldable.any (\b -> Graph.isParentOf (unName graph) b k) (before k (unName path))
+
+areDConnected ::
+  forall n m g k v. Ord k =>
+  Proof (AreDisjoint n m) ->
+  Named n (TwoSet k) -> Named m (Set k) -> Named g (Graph k v) -> Boolean
+areDConnected p ks conditionedOn g = not <<< Set.isEmpty $ dConnectedBy p ks conditionedOn g
+
+dConnectedBy ::
+  forall n m g k v.
+  Ord k =>
+  Proof (AreDisjoint n m) ->
+  Named n (TwoSet k) -> Named m (Set k) -> Named g (Graph k v) ->
+  Set (Named (PathOf g) (NonEmptyList k))
+dConnectedBy _ ks conditionedOn g =
+  Set.filter unblocked $ allUndirectedPaths (unName ks) g
   where
-    result = Set.filter unblocked $ allUndirectedPaths ks g
     unblocked path = nonCollidersDisjointFromW && collidersAncestorsOfW
       where
-        { yes, no } = NEL.partition (\k -> collider k path g) path
+        { yes, no } = NEL.partition (\k -> collider (pathOf_isPathOf path) k path g) (unName path)
         nonCollidersDisjointFromW =
-          Set.isEmpty (Set.fromFoldable no `Set.intersection` conditionedOn)
+          Set.isEmpty (Set.fromFoldable no `Set.intersection` unName conditionedOn)
         collidersAncestorsOfW =
           Foldable.all
             (\k -> not <<< Set.isEmpty $
-              Set.insert k (Graph.descendants k g) `Set.intersection` conditionedOn)
+              Set.insert k (Graph.descendants k (unName g)) `Set.intersection` 
+              unName conditionedOn)
             yes
 
--- Returns `Nothing` iff the `k` is in the set conditioned on
-dConnectedTo :: forall k v. Ord k => k -> Set k -> Graph k v -> Maybe (Set k)
-dConnectedTo k conditionedOn g =
-  if k `Set.member` conditionedOn
-  then Nothing
-  else Just result
+dConnectedTo :: 
+  forall n m k v.
+  Ord k =>
+  Proof (AreDisjoint n m) -> Named n k -> Named m (Set k) -> Graph k v -> Set k
+dConnectedTo _ k conditionedOn g =
+  Set.filter isDConnectedToK <<<
+  Set.delete (unName k) <<< Map.keys <<< Graph.toMap $ g
   where
-    result =
-      Set.filter (\v -> fromMaybe false $ areDConnected (MkTwoSet k v) conditionedOn g) <<<
-      Set.delete k <<< Map.keys <<< Graph.toMap $ g
+    isDConnectedToK v =
+      name2 (MkTwoSet (unName k) v) g (\kv g' ->
+        maybe false (\p -> areDConnected p kv conditionedOn g') $
+        disjointnessTwoSet kv conditionedOn)
 
-areDSeparated :: forall k v. Ord k => TwoSet k -> Set k -> Graph k v -> Maybe Boolean
-areDSeparated ks conditionedOn g = Set.isEmpty <$> dConnectedBy ks conditionedOn g
+areDSeparated ::
+  forall n m g k v.
+  Ord k =>
+  Proof (AreDisjoint n m) ->
+  Named n (TwoSet k) -> Named m (Set k) -> Named g (Graph k v) -> Boolean
+areDSeparated p ks conditionedOn g =
+  Set.isEmpty $ dConnectedBy p ks conditionedOn g
 
--- Returns `Nothing` iff the `k` is in the set conditioned on
-dSeparatedFrom :: forall k v. Ord k => k -> Set k -> Graph k v -> Maybe (Set k)
-dSeparatedFrom k conditionedOn g =
-  if k `Set.member` conditionedOn
-  then Nothing
-  else Just result
-  where
-    result =
-      Set.filter (\v -> fromMaybe false $ areDSeparated (MkTwoSet k v) conditionedOn g) <<<
-      Set.delete k <<< Map.keys <<< Graph.toMap $ g
+dSeparatedFrom ::
+  forall n m k v.
+  Ord k =>
+  Proof (AreDisjoint n m) -> Named n k -> Named m (Set k) -> Graph k v -> Set k
+dSeparatedFrom _ k conditionedOn g =
+   Set.filter isDSeparatedFromK <<<
+   Set.delete (unName k) <<< Map.keys <<< Graph.toMap $ g
+   where
+     isDSeparatedFromK v =
+       name2 (MkTwoSet (unName k) v) g (\kv g' ->
+         maybe false (\p -> areDSeparated p kv conditionedOn g') $
+         disjointnessTwoSet kv conditionedOn)
 
 dSeparations :: forall k v. Ord k => Set k -> Graph k v -> Set (TwoSet k)
-dSeparations conditionedOn g =
-  Set.filter (\ks -> fromMaybe false $ areDSeparated ks conditionedOn g) <<<
+dSeparations conditionedOn' g =
+  Set.filter areDSeparated' <<<
   distinctTwoSets <<<
   Map.keys <<< Graph.toMap $ g
-
-allUndirectedPaths :: forall k v. Ord k => TwoSet k -> Graph k v -> Set (NonEmptyList k)
-allUndirectedPaths (MkTwoSet start end) g = Set.map NEL.reverse $ go Nothing start
   where
-    go hist k =
-      if end == k
-      then Set.singleton hist'
-      else
-        if adjacent' == Set.empty
-        then Set.empty
-        else Foldable.foldMap (go $ Just hist') adjacent'
-      where
-        adjacent' = Graph.adjacent k g `Set.difference` maybe Set.empty Set.fromFoldable hist
-        hist' = maybe (pure k) (nelCons k) hist
+    areDSeparated' ks' =
+      name3 ks' conditionedOn' g (\ks conditionedOn g' ->
+        maybe false (\p -> areDSeparated p ks conditionedOn g') $
+        disjointnessTwoSet ks conditionedOn)
 
--- Returns `Nothing` iff the cause or the effect is in the set conditioned on
 instruments ::
-  forall k v.
+  forall n m k v.
   Ord k =>
-  { cause :: k, effect :: k } -> Set k -> Graph k v -> Maybe (Set k)
-instruments { cause, effect } conditionedOn g =
-  case
-    Tuple
-      (dConnectedTo cause conditionedOn g)
-      (dSeparatedFrom effect conditionedOn (intervene cause g)) of
-    Tuple (Just connected) (Just separated) -> Just $ connected `Set.intersection` separated
-    Tuple _ _ -> Nothing
+  Proof (AreDisjoint n m) ->
+  Named n { cause :: k, effect :: k } -> Named m (Set k) -> Graph k v -> Set k
+instruments p causeEffect conditionedOn g =
+  connected `Set.intersection` separated
+  where
+    separated = 
+      dSeparatedFrom
+        (effect_disjoint p)
+        (effect causeEffect)
+        conditionedOn
+        (intervene (_.cause <<< unName $ causeEffect) g)
+    connected =
+      dConnectedTo (cause_disjoint p) (cause causeEffect) conditionedOn g
 
 isInstrument ::
-  forall k v. Ord k => k -> { cause :: k, effect :: k } -> Set k -> Graph k v -> Maybe Boolean
-isInstrument i ks conditionedOn g =
-  Set.member i <$> instruments ks conditionedOn g
+  forall n m k v.
+  Ord k =>
+  Proof (AreDisjoint n m) ->
+  k -> Named n { cause :: k, effect :: k } -> Named m (Set k) -> Graph k v -> Boolean
+isInstrument p i ks conditionedOn g =
+  Set.member i $ instruments p ks conditionedOn g
 
 intervene :: forall k v. Ord k => k -> Graph k v -> Graph k v
 intervene k g = foldr removePointers g <<< Map.keys <<< Graph.toMap $ g
   where
     removePointers = Graph.alterEdges (map $ Set.filter (_ /= k))
 
--- Returns `Nothing` iff the conditioning set contains the cause or the effect
 satisfyBackdoor ::
-  forall k v.
+  forall n m g k v.
   Ord k =>
-  { cause :: k, effect :: k } -> Set k -> Graph k v -> Maybe Boolean
-satisfyBackdoor { cause, effect } conditionedOn g =
-  if cause `Set.member` conditionedOn || effect `Set.member` conditionedOn
-  then Nothing
-  else Just result
+  Proof (AreDisjoint n m) ->
+  Named n { cause :: k, effect :: k } -> Named m (Set k) -> Named g (Graph k v) -> Boolean
+satisfyBackdoor _ causeEffect conditionedOn g =
+  Foldable.all (not <<< descendsFromCause) (unName conditionedOn) &&
+  Foldable.all pathBlocked pathsPointingToCause
   where
-    result =
-      Foldable.all (not <<< descendsFromCause) conditionedOn &&
-      Foldable.all pathBlocked pathsPointingToCause
-    pathBlocked = not <<< Set.isEmpty <<< Set.intersection conditionedOn <<< Set.fromFoldable
-    descendsFromCause p = cause `Set.member` Graph.descendants p g
+    { cause, effect } = unName causeEffect
+    pathBlocked = 
+      not <<< Set.isEmpty <<< Set.intersection (unName conditionedOn) <<< 
+      Set.fromFoldable <<< unName
+    descendsFromCause p = cause `Set.member` Graph.descendants p (unName g)
     pathsPointingToCause =
-      Set.filter ((==) cause <<< NEL.last) $
+      Set.filter ((==) cause <<< NEL.last <<< unName) $
       allUndirectedPaths (MkTwoSet cause effect) g
