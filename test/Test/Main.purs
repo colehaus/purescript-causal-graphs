@@ -165,6 +165,8 @@ main = run [consoleReporter] do
     it "backdoor" do
       name3 { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph4 (\ce c g ->
         isJust (Causal.isBackdoor axiom ce c g) `shouldEqual` true)
+      Causal.backdoors { cause: 'X', effect: 'Y' } graph4 `shouldEqual` Set.fromFoldable [ Set.singleton 'W', Set.singleton 'Z', Set.fromFoldable [ 'W', 'Z' ] ]
+      Causal.minimalBackdoors { cause: 'X', effect: 'Y' } graph4 `shouldEqual` Set.fromFoldable [ Set.singleton 'W', Set.singleton 'Z' ]
   describe "Relationships" do
     it "dSeparatedFrom and dConnectedTo cohere" do
       quickCheck'' ado

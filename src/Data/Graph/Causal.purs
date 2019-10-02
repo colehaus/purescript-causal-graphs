@@ -192,3 +192,29 @@ isBackdoor _ causeEffect conditionedOn g =
           where
             second = fromMaybe last <<< List.head $ xs
 
+minimalBackdoors ::
+  forall k v. Ord k => { cause :: k, effect :: k } -> Graph k v -> Set (Set k)
+minimalBackdoors causeEffect = keepSmallest <<< backdoors causeEffect
+  where
+    keepSmallest xs = Set.filter (\s -> m == Set.size s) xs
+      where
+        -- 0 doesn't really matter since if the set is empty, the filter above will be a no-op
+        m = maybe 0 Set.size <<< Foldable.minimumBy (compare `on` Set.size) $ xs
+
+backdoors :: forall k v. Ord k => { cause :: k, effect :: k } -> Graph k v -> Set (Set k)
+backdoors { cause, effect } g = name2 g { cause, effect } go
+  where
+    go :: forall g n. Named g (Graph k v) -> Named n { cause :: k, effect :: k } -> Set (Set k)
+    go g' causeEffect =
+      Set.filter (\s -> name s checkBackdoor) <<< powerSet <<<
+      Set.filter (not <<< flip (Graph.isDescendantOf g) cause) <<<
+      Set.delete cause <<< Set.delete effect <<<
+      Map.keys <<< Graph.toMap $ g
+      where
+        checkBackdoor :: forall m. Named m (Set k) -> Boolean
+        checkBackdoor conditionedOn =
+          case disjointnessCauseEffect causeEffect conditionedOn of
+            Just p -> isJust $ isBackdoor p causeEffect conditionedOn g'
+            -- This case should never apply because
+            -- we delete `cause` and `effect` elsewhere
+            Nothing -> false
