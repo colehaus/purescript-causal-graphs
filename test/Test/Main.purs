@@ -2,7 +2,7 @@ module Test.Main where
 
 import Prelude
 
-import Causal.Kernel (disjointnessSingleton)
+import Causal.Kernel (Path(..), allUndirectedPaths, disjointnessSingleton)
 import Data.Array as Array
 import Data.Foldable as Foldable
 import Data.Function (on)
@@ -10,6 +10,7 @@ import Data.Generic.Rep (class Generic)
 import Data.Graph (Graph)
 import Data.Graph as Graph
 import Data.Graph.Causal as Causal
+import Data.List (List(..))
 import Data.List as List
 import Data.List.NonEmpty as NEL
 import Data.Map as Map
@@ -21,7 +22,9 @@ import Data.Tuple (Tuple(..), uncurry)
 import Data.TwoSet (TwoSet(..))
 import Effect (Effect)
 import Effect.Aff (Aff)
-import GDP.Named (name2, name3, unName)
+import Effect.Class (liftEffect)
+import Effect.Class.Console (log)
+import GDP.Named (name, name2, name3, unName)
 import GDP.Proof (axiom)
 import Partial.Unsafe (unsafePartial)
 import Test.QuickCheck (arbitrary)
@@ -100,12 +103,11 @@ main = run [consoleReporter] do
                 ])
       Graph.toMap (Causal.intervene 'Y' graph3) `shouldEqual` Graph.toMap intervened
     it "dConnectedBy" do
-      let nel x = unsafePartial $ fromJust <<< NEL.fromList <<< List.fromFoldable $ x
       name3 (MkTwoSet 'X' 'Y') Set.empty graph1 (\vs c g ->
         Causal.dConnectedBy axiom vs c g `shouldEqual` Set.empty)
       name3 (MkTwoSet 'X' 'Y') (Set.fromFoldable [ 'S', 'T' ]) graph1 (\vs c g ->
         (Set.map unName $ Causal.dConnectedBy axiom vs c g) `shouldEqual`
-        Set.singleton (nel [ 'X', 'U', 'V', 'W', 'Y' ]))
+        Set.singleton (MkPath 'X'  (List.fromFoldable ['U', 'V', 'W']) 'Y' ))
 
       name3 (MkTwoSet 'X' 'Y') (Set.fromFoldable [ 'S', 'T', 'V']) graph1 (\vs c g ->
         Causal.dConnectedBy axiom vs c g `shouldEqual` Set.empty)
@@ -115,14 +117,14 @@ main = run [consoleReporter] do
 
       name3 (MkTwoSet 'X' 'Z') (Set.singleton 'Y') graph2 (\vs c g ->
         (Set.map unName $ Causal.dConnectedBy axiom vs c g) `shouldEqual`
-        Set.singleton (nel [ 'X', 'Y', 'Z' ]))
+        Set.singleton (MkPath 'X' (pure 'Y') 'Z' ))
 
       name3 (MkTwoSet 'W' 'Z') Set.empty graph3 (\vs c g ->
         (Set.map unName $ Causal.dConnectedBy axiom vs c g) `shouldEqual`
         Set.fromFoldable
           [
-            nel [ 'W', 'Z' ]
-          , nel [ 'W', 'Y', 'Z' ]
+            MkPath 'W' Nil 'Z'
+          , MkPath 'W' (pure 'Y') 'Z'
           ])
     it "dSeparations" do
       Causal.dSeparations (Set.singleton 'X') graph2 `shouldEqual` Set.empty
@@ -162,7 +164,7 @@ main = run [consoleReporter] do
         Causal.instruments axiom ce c graph3 `shouldEqual` Set.singleton 'X')
     it "backdoor" do
       name3 { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph4 (\ce c g ->
-        isJust (Causal.satisfyBackdoor axiom ce c g) `shouldEqual` true)
+        isJust (Causal.isBackdoor axiom ce c g) `shouldEqual` true)
   describe "Relationships" do
     it "dSeparatedFrom and dConnectedTo cohere" do
       quickCheck'' ado

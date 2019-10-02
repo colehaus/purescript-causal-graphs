@@ -3,6 +3,7 @@ module Causal.Kernel
   , AreDisjoint
   , Effect
   , IsPathOf
+  , Path(..)
   , PathOf
   , allUndirectedPaths
   , disjointnessCauseEffect
@@ -17,39 +18,74 @@ module Causal.Kernel
 
 import Prelude
 
+import Data.Foldable (class Foldable, foldMap, foldlDefault, foldrDefault)
 import Data.Foldable as Foldable
+import Data.Generic.Rep (class Generic)
+import Data.Generic.Rep.Show (genericShow)
 import Data.Graph (Graph)
 import Data.Graph as Graph
+import Data.List (List(..), (:))
+import Data.List as List
 import Data.List.NonEmpty (NonEmptyList)
-import Data.List.NonEmpty as NEL
-import Data.List.Types (nelCons)
-import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe (Maybe(..))
 import Data.Set (Set)
 import Data.Set as Set
 import Data.TwoSet (TwoSet(..))
 import GDP.Named (Defn, Named, defn, unName)
 import GDP.Proof (Proof, axiom)
+import Partial.Unsafe (unsafeCrashWith)
+
+-- List with length at least 2
+data Path a = MkPath a (List a) a
+derive instance eqPath :: Eq a => Eq (Path a)
+derive instance ordPath :: Ord a => Ord (Path a)
+derive instance genericPath :: Generic (Path a) _
+instance showPath :: Show a => Show (Path a) where
+  show = genericShow
+instance foldablePath :: Foldable Path where
+  foldMap f p = foldMap f (pathToList p)
+  foldr x = foldrDefault x
+  foldl x = foldlDefault x
+
+pathToList :: forall a. Path a -> List a
+pathToList (MkPath head xs last) = List.snoc (head : xs) last
+
+tail :: forall a. Path a -> List a
+tail (MkPath head xs last) = List.snoc xs last
+
+reverse :: forall a. Path a -> Path a
+reverse p =
+  case List.uncons $ List.reverse <<< pathToList $ p of
+    Just { head, tail } ->
+      case List.unsnoc tail of
+        Just { init, last } -> MkPath head init last
+        Nothing -> unsafeCrashWith "`reverse` preserves list length"
+    _ -> unsafeCrashWith "`reverse` preserves list length"
 
 data PathOf g = MkPathOf Defn
 
+consPath :: forall a. a -> Path a -> Path a
+consPath x (MkPath head xs last) = MkPath head (x : xs) last
+
+-- TODO: It seems a little sketchy that all the paths are getting the same name
 allUndirectedPaths ::
   forall g k v.
   Ord k =>
-  TwoSet k -> Named g (Graph k v) -> Set (Named (PathOf g) (NonEmptyList k))
+  TwoSet k -> Named g (Graph k v) -> Set (Named (PathOf g) (Path k))
 allUndirectedPaths (MkTwoSet start end) g =
-  Set.map (defn MkPathOf <<< NEL.reverse) $ go Nothing start
+  Set.map (defn MkPathOf <<< reverse) $ go (MkPath end Nil start) start
   where
     go hist k =
-      if end == k
-      then Set.singleton hist'
-      else
-        if adjacent' == Set.empty
-        then Set.empty
-        else Foldable.foldMap (go $ Just hist') adjacent'
+      if adjacent' == Set.empty
+      then Set.empty
+      else Foldable.foldMap goAgain adjacent'
       where
+        goAgain x =
+          if x == end
+          then Set.singleton hist
+          else go (consPath x hist) x
         adjacent' =
-          Graph.adjacent k (unName g) `Set.difference` maybe Set.empty Set.fromFoldable hist
-        hist' = maybe (pure k) (nelCons k) hist
+          Graph.adjacent k (unName g) `Set.difference` Set.fromFoldable (tail hist)
 
 data IsPathOf p g
 
