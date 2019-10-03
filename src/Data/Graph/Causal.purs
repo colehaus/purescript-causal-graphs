@@ -311,8 +311,6 @@ frontdoorSets { cause, effect } g' = name2 { cause, effect } g' go
       Set (Set k)
     go causeEffect g =
       Set.filter (\s -> name s checkFrontdoor) <<< powerSet <<<
-      -- More pruning for performance
-      Set.filter (not <<< flip (Graph.isDescendantOf (unName g)) cause) <<<
       Set.delete cause <<< Set.delete effect $
       frontdoorPathVertices
       where

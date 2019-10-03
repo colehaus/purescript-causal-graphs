@@ -2,7 +2,7 @@ module Test.Main where
 
 import Prelude
 
-import Causal.Kernel (Path(..), allUndirectedPaths, disjointnessSingleton)
+import Causal.Kernel (Path(..), disjointnessSingleton)
 import Data.Array as Array
 import Data.Foldable as Foldable
 import Data.Function (on)
@@ -12,9 +12,8 @@ import Data.Graph as Graph
 import Data.Graph.Causal as Causal
 import Data.List (List(..))
 import Data.List as List
-import Data.List.NonEmpty as NEL
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromJust, isJust)
+import Data.Maybe (Maybe(..), isJust)
 import Data.Newtype (class Newtype, un)
 import Data.Set (Set)
 import Data.Set as Set
@@ -22,11 +21,8 @@ import Data.Tuple (Tuple(..), uncurry)
 import Data.TwoSet (TwoSet(..))
 import Effect (Effect)
 import Effect.Aff (Aff)
-import Effect.Class (liftEffect)
-import Effect.Class.Console (log)
-import GDP.Named (name, name2, name3, unName)
+import GDP.Named (name2, name3, unName)
 import GDP.Proof (axiom)
-import Partial.Unsafe (unsafePartial)
 import Test.QuickCheck (arbitrary)
 import Test.QuickCheck as QuickCheck
 import Test.QuickCheck.Gen (Gen, suchThat)
@@ -91,6 +87,38 @@ main = run [consoleReporter] do
               , n 'X' [ 'Y' ]
               , n 'W' [ 'Y' ]
               , n 'Y' []
+              ])
+        --   Z
+        --  / \
+        -- v   v
+        -- X   Y
+        graph5 =
+          Graph.fromMap (
+            Map.fromFoldable
+              [ n 'Z' [ 'X', 'Y' ]
+              , n 'X' []
+              , n 'Y' []
+              ])
+        graph6 =
+          Graph.fromMap (
+            Map.fromFoldable
+              [ n 'X' [ 'Y' ]
+              , n 'Y' []
+              ])
+        --     Z
+        --    /  \
+        --   /    \
+        --  /      \
+        -- /        \
+        -- v         v
+        -- X -> W -> Y
+        graph7 =
+          Graph.fromMap (
+            Map.fromFoldable
+              [ n 'W' [ 'Y' ]
+              , n 'X' [ 'W' ]
+              , n 'Y' []
+              , n 'Z' [ 'X', 'Y' ]
               ])
     it "intervene" do
       let intervened =
@@ -164,9 +192,16 @@ main = run [consoleReporter] do
         Causal.instruments axiom ce c graph3 `shouldEqual` Set.singleton 'X')
     it "backdoor" do
       name3 { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph4 (\ce c g ->
-        isJust (Causal.isBackdoor axiom ce c g) `shouldEqual` true)
-      Causal.backdoors { cause: 'X', effect: 'Y' } graph4 `shouldEqual` Set.fromFoldable [ Set.singleton 'W', Set.singleton 'Z', Set.fromFoldable [ 'W', 'Z' ] ]
-      Causal.minimalBackdoors { cause: 'X', effect: 'Y' } graph4 `shouldEqual` Set.fromFoldable [ Set.singleton 'W', Set.singleton 'Z' ]
+        isJust (Causal.satisfiesBackdoor axiom ce c g) `shouldEqual` true)
+      Causal.backdoorSets { cause: 'X', effect: 'Y' } graph4 `shouldEqual` Set.fromFoldable [ Set.singleton 'W', Set.singleton 'Z', Set.fromFoldable [ 'W', 'Z' ] ]
+      Causal.minimalBackdoorSets { cause: 'X', effect: 'Y' } graph4 `shouldEqual` Set.fromFoldable [ Set.singleton 'W', Set.singleton 'Z' ]
+      Causal.backdoorSets { cause: 'X', effect: 'Y' } graph6 `shouldEqual` Set.singleton Set.empty
+    it "frontdoor" do
+      name3 { cause: 'X', effect: 'Y' } (Set.singleton 'W') graph7 (\ce c g ->
+        isJust (Causal.satisfiesFrontdoor axiom ce c g) `shouldEqual` true)
+      Causal.frontdoorSets { cause: 'X', effect: 'Y' } graph7 `shouldEqual` Set.singleton (Set.singleton 'W')
+      Causal.frontdoorSets { cause: 'X', effect: 'Y' } graph5 `shouldEqual` Set.singleton Set.empty
+      Causal.frontdoorSets { cause: 'X', effect: 'Y' } graph6 `shouldEqual` Set.empty
   describe "Relationships" do
     it "dSeparatedFrom and dConnectedTo cohere" do
       quickCheck'' ado
