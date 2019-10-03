@@ -5,6 +5,7 @@ module Causal.Kernel
   , IsPathOf
   , Path(..)
   , PathOf
+  , allDirectedPaths
   , allUndirectedPaths
   , disjointnessCauseEffect
   , disjointnessTwoSet
@@ -72,7 +73,22 @@ allUndirectedPaths ::
   forall g k v.
   Ord k =>
   TwoSet k -> Named g (Graph k v) -> Set (Named (PathOf g) (Path k))
-allUndirectedPaths (MkTwoSet start end) g =
+allUndirectedPaths (MkTwoSet start end) = bfs Graph.adjacent { start, end }
+
+-- TODO: It seems a little sketchy that all the paths are getting the same name
+allDirectedPaths ::
+  forall g k v.
+  Ord k =>
+  { start :: k, end :: k } -> Named g (Graph k v) -> Set (Named (PathOf g) (Path k))
+allDirectedPaths = bfs Graph.children
+
+-- TODO: It seems a little sketchy that all the paths are getting the same name
+bfs ::
+  forall g k v.
+  Ord k =>
+  (k -> Graph k v -> Set k) -> { start :: k, end :: k } -> Named g (Graph k v) ->
+  Set (Named (PathOf g) (Path k))
+bfs nextVertices { start,  end } g =
   Set.map (defn MkPathOf <<< reverse) $ go (MkPath end Nil start) start
   where
     go hist k =
@@ -85,7 +101,7 @@ allUndirectedPaths (MkTwoSet start end) g =
           then Set.singleton hist
           else go (consPath x hist) x
         adjacent' =
-          Graph.adjacent k (unName g) `Set.difference` Set.fromFoldable (tail hist)
+          nextVertices k (unName g) `Set.difference` Set.fromFoldable (tail hist)
 
 data IsPathOf p g
 

@@ -2,22 +2,26 @@ module Data.Graph.Causal where
 
 import Prelude
 
-import Causal.Kernel (AreDisjoint, IsPathOf, Path(..), PathOf, allUndirectedPaths, cause, cause_disjoint, disjointnessCauseEffect, disjointnessTwoSet, effect, effect_disjoint, pathOf_isPathOf)
-import Data.Either (Either(..), isLeft, isRight)
+import Causal.Kernel (AreDisjoint, IsPathOf, Path(..), PathOf, allDirectedPaths, allUndirectedPaths, cause, cause_disjoint, disjointnessCauseEffect, disjointnessTwoSet, effect, effect_disjoint, pathOf_isPathOf)
+import Data.Either (Either(..), either, isLeft, isRight)
+import Data.Either as Either
 import Data.Foldable (foldr)
 import Data.Foldable as Foldable
 import Data.Function (on)
 import Data.Graph (Graph)
 import Data.Graph as Graph
 import Data.Graph.Causal.Utility (after, before, distinctTwoSets, powerSet)
+import Data.List ((:))
 import Data.List as List
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
+import Data.NonEmpty (foldl1, (:|))
 import Data.Set (Set)
 import Data.Set as Set
 import Data.TwoSet (TwoSet(..))
 import GDP.Named (Named, name, name2, name3, unName)
 import GDP.Proof (Proof, axiom)
+import Partial.Unsafe (unsafeCrashWith)
 
 data IsCollider collider path graph
 
@@ -54,18 +58,18 @@ dConnectedBy ::
   Named n (TwoSet k) -> Named m (Set k) -> Named g (Graph k v) ->
   Set (Named (PathOf g) (Path k))
 dConnectedBy _ ks conditionedOn g =
-  Set.filter (\p -> isLeft $ blocked (pathOf_isPathOf p) p conditionedOn g) $
+  Set.filter (\p -> isLeft $ isBlocked (pathOf_isPathOf p) p conditionedOn g) $
   allUndirectedPaths (unName ks) g
 
 data Blocked path conditionedOn graph
 data Unblocked path conditionedOn graph
 
-blocked ::
+isBlocked ::
   forall g k m p v. Ord k =>
   Proof (IsPathOf p g) ->
   Named p (Path k) -> Named m (Set k) -> Named g (Graph k v) ->
-  Either (Proof (Unblocked p m g)) (Proof (Blocked p m g)) 
-blocked p path conditionedOn g =
+  Either (Proof (Unblocked p m g)) (Proof (Blocked p m g))
+isBlocked p path conditionedOn g =
   if nonCollidersDisjointFromW && collidersAncestorsOfW
   then Left axiom
   else Right axiom
@@ -168,53 +172,198 @@ intervene k g = foldr removePointers g <<< Map.keys <<< Graph.toMap $ g
   where
     removePointers = Graph.alterEdges (map $ Set.filter (_ /= k))
 
-data IsBackdoor causeEffect conditionedOn graph
+data SatisfiesBackdoor causeEffect conditionedOn graph
 
-isBackdoor ::
+-- | Returns either a proof witness or a set of the remaining back-door paths
+-- | (which could be empty)
+satisifiesBackdoor ::
   forall n m g k v.
   Ord k =>
   Proof (AreDisjoint n m) ->
   Named n { cause :: k, effect :: k } -> Named m (Set k) -> Named g (Graph k v) ->
-  Maybe (Proof (IsBackdoor n m g))
-isBackdoor _ causeEffect conditionedOn g =
-  if test then Just axiom else Nothing
+  Either (Set (Named (PathOf g) (Path k))) (Proof (SatisfiesBackdoor n m g))
+satisifiesBackdoor _ causeEffect conditionedOn g =
+  if test then Right axiom else Left remainingBackdoorPaths
   where
     { cause, effect } = unName causeEffect
+    remainingBackdoorPaths =
+      Set.filter
+        (\p -> isLeft $ isBlocked (pathOf_isPathOf p) p conditionedOn g)
+        (backdoorPaths { cause, effect } g)
     test =
       Set.isEmpty (Graph.descendants cause (unName g) `Set.intersection` unName conditionedOn) &&
-      Foldable.all (\p -> isRight $ blocked (pathOf_isPathOf p) p conditionedOn g) pathsPointingToCause
-    pathsPointingToCause =
-      Set.filter (pointsAtHead <<< unName) $
-      allUndirectedPaths (MkTwoSet cause effect) g
+      Set.isEmpty remainingBackdoorPaths
+
+backdoorPaths ::
+  forall g k v.
+  Ord k =>
+  { cause :: k, effect :: k } -> Named g (Graph k v) -> Set (Named (PathOf g) (Path k))
+backdoorPaths { cause, effect } g =
+  Set.filter (pointsAtHead <<< unName) $
+  allUndirectedPaths (MkTwoSet cause effect) g
+  where
+    pointsAtHead (MkPath head xs last) =
+      maybe false (Set.member head) <<< Graph.outEdges second $ unName g
       where
-        pointsAtHead (MkPath head xs last) =
-          maybe false (Set.member head) <<< Graph.outEdges second $ unName g
-          where
-            second = fromMaybe last <<< List.head $ xs
+        second = fromMaybe last <<< List.head $ xs
+
 
 minimalBackdoors ::
-  forall k v. Ord k => { cause :: k, effect :: k } -> Graph k v -> Set (Set k)
-minimalBackdoors causeEffect = keepSmallest <<< backdoors causeEffect
+  forall g k v. Ord k =>
+  { cause :: k, effect :: k } -> Named g (Graph k v) ->
+  Either (Set (Named (PathOf g) (Path k))) (Set (Set k))
+minimalBackdoors causeEffect = map keepSmallest <<< backdoorSets causeEffect
   where
     keepSmallest xs = Set.filter (\s -> m == Set.size s) xs
       where
         -- 0 doesn't really matter since if the set is empty, the filter above will be a no-op
         m = maybe 0 Set.size <<< Foldable.minimumBy (compare `on` Set.size) $ xs
 
-backdoors :: forall k v. Ord k => { cause :: k, effect :: k } -> Graph k v -> Set (Set k)
-backdoors { cause, effect } g = name2 g { cause, effect } go
+-- | Returns either each set of conditioning vertices that satisfies the backdoor criterion or
+-- | the backdoor paths which can't be avoided by any set of conditioning vertices
+backdoorSets ::
+  forall g k v.
+  Ord k =>
+  { cause :: k, effect :: k } -> Named g (Graph k v) ->
+  Either (Set (Named (PathOf g) (Path k))) (Set (Set k))
+backdoorSets { cause, effect } g = name { cause, effect } go
   where
-    go :: forall g n. Named g (Graph k v) -> Named n { cause :: k, effect :: k } -> Set (Set k)
-    go g' causeEffect =
-      Set.filter (\s -> name s checkBackdoor) <<< powerSet <<<
-      Set.filter (not <<< flip (Graph.isDescendantOf g) cause) <<<
-      Set.delete cause <<< Set.delete effect <<<
-      Map.keys <<< Graph.toMap $ g
+    go ::
+      forall n.
+      Named n { cause :: k, effect :: k } ->
+      Either (Set (Named (PathOf g) (Path k))) (Set (Set k))
+    go causeEffect =
+      anyBackdoorSets <<<
+      Set.map (\s -> name s checkBackdoor) <<< powerSet <<<
+      -- More pruning for performance
+      Set.filter (not <<< flip (Graph.isDescendantOf (unName g)) cause) <<<
+      Set.delete cause <<< Set.delete effect $
+      backdoorPathVertices
       where
-        checkBackdoor :: forall m. Named m (Set k) -> Boolean
+        -- These are the only vertices that could possibly satisfy the backdoor criterion
+        -- so we look only at these instead of all vertices as a performance optimization
+        backdoorPathVertices =
+          Set.unions <<< Set.map (Set.fromFoldable <<< unName) <<<
+          backdoorPaths (unName causeEffect) $ g
+        anyBackdoorSets backdoorResults =
+          if Foldable.any isRight backdoorResults
+          then
+            Right <<<
+            Set.fromFoldable <<< List.catMaybes <<< map Either.hush <<< List.fromFoldable $
+            backdoorResults
+          -- If blocking one backdoor path opens another and vice versa,
+          -- the intersections of unblocked paths might be empty
+          else Left <<< intersections <<<
+               List.catMaybes <<< map (either Just (const Nothing)) <<<
+               List.fromFoldable $ backdoorResults
+          where
+            intersections = foldl1 Set.intersection <<< nonEmpty
+              where
+                nonEmpty (x : xs) = x :| xs
+                nonEmpty _ =
+                  unsafeCrashWith
+                    ("`powerSet` always returns at least one element" <>
+                    "and if none of the elements are `Right`," <>
+                    "there must be at least one left")
+        checkBackdoor ::
+          forall m.
+          Named m (Set k) -> Either (Set (Named (PathOf g) (Path k))) (Set k)
         checkBackdoor conditionedOn =
           case disjointnessCauseEffect causeEffect conditionedOn of
-            Just p -> isJust $ isBackdoor p causeEffect conditionedOn g'
-            -- This case should never apply because
-            -- we delete `cause` and `effect` elsewhere
-            Nothing -> false
+            Just p ->
+              const (unName conditionedOn) <$> satisifiesBackdoor p causeEffect conditionedOn g
+            Nothing ->
+              unsafeCrashWith "We already deleted cause and effect from the vertices considered"
+
+data SatisfiesFrontdoor causeEffect conditionedOn graph
+
+-- | Returns either a proof witness or a set of the remaining front-door paths
+-- | (which could be empty)
+satisfiesFrontdoor ::
+  forall n m g k v.
+  Ord k =>
+  Proof (AreDisjoint n m) ->
+  Named n { cause :: k, effect :: k } -> Named m (Set k) -> Named g (Graph k v) ->
+  Either (Set (Named (PathOf g) (Path k))) (Proof (SatisfiesBackdoor n m g))
+satisfiesFrontdoor _ causeEffect conditionedOn g =
+  if test then Right axiom else Left remainingFrontdoorPaths
+  where
+    { cause, effect } = unName causeEffect
+    test =
+      Set.isEmpty remainingFrontdoorPaths &&
+      Foldable.all
+        (\p -> name Set.empty (\s -> isRight $ isBlocked (pathOf_isPathOf p) p s g))
+        backdoorPathsFromCauseToConditioningSet &&
+      Foldable.all
+        (\p -> name (Set.singleton cause) (\s -> isRight $ isBlocked (pathOf_isPathOf p) p s g))
+        backdoorPathsFromConditioningSetToEffect
+    remainingFrontdoorPaths =
+      Set.filter
+        (\p -> isLeft $ isBlocked (pathOf_isPathOf p) p conditionedOn g)
+        (frontdoorPaths (unName causeEffect) g)
+    backdoorPathsFromCauseToConditioningSet =
+      Set.unions (Set.map (\k -> backdoorPaths { cause, effect: k} g) (unName conditionedOn))
+    backdoorPathsFromConditioningSetToEffect =
+      Set.unions (Set.map (\k -> backdoorPaths { cause: k, effect} g) (unName conditionedOn))
+
+frontdoorPaths ::
+  forall g k v.
+  Ord k =>
+  { cause :: k, effect :: k } -> Named g (Graph k v) -> Set (Named (PathOf g) (Path k))
+frontdoorPaths { cause, effect } = allDirectedPaths { start: cause, end: effect }
+
+-- | Returns either each set of conditioning vertices that satisfies the frontdoor criterion or
+-- | the frontdoor paths which can't be avoided by any set of conditioning vertices
+frontdoorSets ::
+  forall g k v.
+  Ord k =>
+  { cause :: k, effect :: k } -> Named g (Graph k v) ->
+  Either (Set (Named (PathOf g) (Path k))) (Set (Set k))
+frontdoorSets { cause, effect } g = name { cause, effect } go
+  where
+    go ::
+      forall n.
+      Named n { cause :: k, effect :: k } ->
+      Either (Set (Named (PathOf g) (Path k))) (Set (Set k))
+    go causeEffect =
+      anyFrontdoorSets <<<
+      Set.map (\s -> name s checkFrontdoor) <<< powerSet <<<
+      -- More pruning for performance
+      Set.filter (not <<< flip (Graph.isDescendantOf (unName g)) cause) <<<
+      Set.delete cause <<< Set.delete effect $
+      frontdoorPathVertices
+      where
+        -- These are the only vertices that could possibly satisfy the backdoor criterion
+        -- so we look only at these instead of all vertices as a performance optimization
+        frontdoorPathVertices =
+          Set.unions <<< Set.map (Set.fromFoldable <<< unName) <<<
+          frontdoorPaths (unName causeEffect) $ g
+        anyFrontdoorSets frontdoorResults =
+          if Foldable.any isRight frontdoorResults
+          then
+            Right <<<
+            Set.fromFoldable <<< List.catMaybes <<< map Either.hush <<< List.fromFoldable $
+            frontdoorResults
+          -- If blocking one backdoor path opens another and vice versa,
+          -- the intersections of unblocked paths might be empty
+          else Left <<< intersections <<<
+               List.catMaybes <<< map (either Just (const Nothing)) <<<
+               List.fromFoldable $ frontdoorResults
+          where
+            intersections = foldl1 Set.intersection <<< nonEmpty
+              where
+                nonEmpty (x : xs) = x :| xs
+                nonEmpty _ =
+                  unsafeCrashWith
+                    ("`powerSet` always returns at least one element" <>
+                    "and if none of the elements are `Right`," <>
+                    "there must be at least one left")
+        checkFrontdoor ::
+          forall m.
+          Named m (Set k) -> Either (Set (Named (PathOf g) (Path k))) (Set k)
+        checkFrontdoor conditionedOn =
+          case disjointnessCauseEffect causeEffect conditionedOn of
+            Just p ->
+              const (unName conditionedOn) <$> satisfiesFrontdoor p causeEffect conditionedOn g
+            Nothing ->
+              unsafeCrashWith "We already deleted cause and effect from the vertices considered"
