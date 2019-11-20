@@ -43,6 +43,8 @@ derive instance ordPath :: Ord a => Ord (Path a)
 derive instance genericPath :: Generic (Path a) _
 instance showPath :: Show a => Show (Path a) where
   show = genericShow
+instance functorPath :: Functor Path where
+  map f (MkPath head xs last) = MkPath (f head) (map f xs) (f last)
 instance foldablePath :: Foldable Path where
   foldMap f p = foldMap f (pathToList p)
   foldr x = foldrDefault x
